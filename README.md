@@ -27,26 +27,56 @@ Bu proje, yükün **güvenli, kontrollü ve otomatik şekilde alınması ve bır
 ## 🛠️ Kullanılan Donanımlar
 
 - **Mikrodenetleyici:** Arduino Uno  
-- **Motor sürücüsü:** BTS7960 (yüksek akım motor kontrolü için)  
+- **Motor sürücüsü:** BTS7960
+- **DC Motor + Makara sistemi**
 - **Encoder:** Motor pozisyonu ve hareket ölçümü için  
 - **Loadcell + HX711:** Yük algılama ve ağırlık ölçümü için  
 - **Kumanda alıcısı (PWM kanalları):** CH6 ve CH7 üzerinden kontrol girişleri  
-- **LED / Buzzer (opsiyonel):** Durum göstergesi ve uyarılar için  
 - **Uçuş bilgisayarı:** İrtifa verisi sağlayıcı (örneğin Pixhawk, Cube veya benzeri)
+- **Seri haberleşme bağlantısı (USB üzerinden uçuş bilgisayarı ile)**
+- **RC Kumanda (CH6 & CH7 sinyalleri için)**
 
 ---
 
-## 📂 Proje Yapısı
+## 💻 Kullanım Kılavuzu
+
+### 🔹 Seri Port Komutları
+Yazılım, seri porttan gelen komutları okuyarak çalışır. Kullanabileceğiniz komutlar:
+
+| Komut             | Açıklama                                                                 |
+|-------------------|---------------------------------------------------------------------------|
+| `Yuk_Al X`        | Yük alma işlemini başlatır. `X` değeri hedef encoder konumunu belirtir.   |
+| `Yuk_Birak X`     | Yük bırakma işlemini başlatır. `X` değeri hedef encoder konumunu belirtir.|
+| `Manuel Y`        | Motoru **manuel modda yukarı** hareket ettirir.                           |
+| `Manuel A`        | Motoru **manuel modda aşağı** hareket ettirir.                            |
+| `STOP`            | Herhangi bir anda tüm işlemleri derhal durdurur.                          |
+
+✅ Örnekler:  
+
 
 ```
-
-📦 VincYazilimi
-┣ 📜 src/                # Kaynak kodlar
-┣ 📜 Vinc.ino            # Ana yazılım dosyası (Arduino Sketch)
-┣ 📜 README.md           # Proje açıklamaları
-┗ 📜 LICENSE             # Lisans dosyası
-
+Yuk_Al 50000
+Yuk_Birak 20000
+Manuel Y
+STOP
 ```
+### 🔹 Kumanda ile Kontrol
+- **CH6** → Yön kontrolü (Yukarı / Aşağı seçimi)  
+- **CH7** → STOP kontrolü  
+  - CH7 belirlenen aralıkta sinyal gönderdiğinde, yazılım STOP komutunu çalıştırır.  
+
+İlk açılışta CH6 ve CH7 yaklaşık **1500 µs** merkez değerindedir. Kumanda kolu yukarı/aşağı hareket ettirildiğinde bu değer **1000 µs – 2000 µs** arasında değişir.  
+
+---
+
+## ⚙️ PID Algoritması
+
+Motor hareketleri sırasında **PID algoritması** kullanılarak:
+- Hedefe uzak mesafelerde maksimum hızda hareket edilir.
+- Hedefe yaklaştıkça hız kademeli olarak düşürülür.
+- Böylece yük ani durmaz, sistem daha kararlı ve güvenli çalışır.  
+
+PID parametreleri (`Kp`, `Ki`, `Kd`) kullanıcı tarafından proje sırasında kalibre edilmelidir.  
 
 ---
 
@@ -65,30 +95,6 @@ Bu proje, yükün **güvenli, kontrollü ve otomatik şekilde alınması ve bır
 
 ---
 
-## 🔧 Kurulum ve Kullanım
-
-1. Arduino IDE üzerinden `Vinc.ino` dosyasını açın.  
-2. Gerekli kütüphaneleri yükleyin:  
-   - HX711 (Loadcell için)  
-   - Encoder kütüphanesi  
-3. Donanım bağlantılarını şemaya uygun şekilde yapın.  
-4. Kodu Arduino’ya yükleyin.  
-5. Seri port veya kumanda ile komut göndererek sistemi test edin.  
-
----
-
-## 📡 Kumanda ve Seri Port Komutları
-
-- **Kumanda CH6 / CH7:**  
-  - Yukarı / Aşağı hareket  
-  - Yük al / bırak işlemleri  
-
-- **Seri Port Komutları:**  
-  - `F1` → Yük Al  
-  - `F2` → Yük Bırak  
-  - `STOP` → Acil durdurma  
-
----
 
 ## 🛡️ Güvenlik Mekanizmaları
 
@@ -102,3 +108,6 @@ Bu proje, yükün **güvenli, kontrollü ve otomatik şekilde alınması ve bır
 ## 📖 Lisans
 
 Bu proje açık kaynaklıdır ve [MIT Lisansı](./LICENSE) altında dağıtılmaktadır.  
+
+---
+
