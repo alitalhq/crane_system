@@ -23,7 +23,6 @@ volatile unsigned long ch6_start, ch6_width;
 volatile unsigned long ch7_start, ch7_width;
 
 
-
 HX711 scale;
 
 int manuelMod = 0; // manuel modun durumu (1 = yukari, -1 = asagi)
@@ -32,6 +31,19 @@ volatile bool stopFlag = false;  // Durum kontrol bayrağı (fonksiyonlardan cik
 
 volatile long int encoderPosition = 0;
 volatile long int lastEncoded = 0;
+
+// PID parametreleri (deneyerek ayarlanmalı) suanki degerler tahmini
+float Kp = 0.7;
+float Ki = 0.05;
+float Kd = 0.2;
+
+long lastError = 0;// PID için baslangic degerleri bunlari degistirmeyin
+long integral = 0;
+
+const int pwmMin = 50;   // Motorun dönmesi için minimum PWM
+const int pwmMax = 255;  // Maks PWM
+
+const int tolerance = 100; // Encoder tolerans, ±100 tick kabul
 
 void setup() {
   Serial.begin(9600);
@@ -100,10 +112,6 @@ void loop() {
     }
   }
 
-
-    
-
-
   unsigned long ch6 = readStableValue(&ch6_width); //interruptı durdurmak yerine farklı şekilde kontrol sağlanıyor
   unsigned long ch7 = readStableValue(&ch7_width);//loop içinde çok fazla interrupt durdurulursa encoder değerine zarar verebilir
   ch7_2 = ch7;
@@ -138,16 +146,17 @@ void loop() {
     }
 
 
-}//LOOP SONU
-
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void motorYukari(){
-  analogWrite(RPWM, 0);  // motor yukari
-  analogWrite(LPWM, 255);
 }
 
-void motorAsagi(){
-  analogWrite(RPWM, 255);  // motor asagi
+void motorYukari(int pwm){
+  pwm = constrain(pwm, pwmMin, pwmMax);
+  analogWrite(RPWM, 0);  // motor yukari
+  analogWrite(LPWM, pwm);
+}
+
+void motorAsagi(int pwm){
+  pwm = constrain(pwm, pwmMin, pwmMax);
+  analogWrite(RPWM, pwm);  // motor asagi
   analogWrite(LPWM, 0);
 }
 
@@ -158,11 +167,11 @@ void motorDur(){
 
 // Manuel motor kontrol fonksiyonu
 void manuelKontrol(int direction) {
-  if (direction == 1) { //yukari
+  if (direction == 1) {
     analogWrite(RPWM, 0);
-    analogWrite(LPWM, 255);
+e    analogWrite(LPWM, 255);
   }
-  else if (direction == -1) { //asagi
+  else if (direction == -1) {
     analogWrite(RPWM, 255);
     analogWrite(LPWM, 0);
   }
@@ -175,47 +184,46 @@ bool yukVarMi(){ //yuk kontrolu
   return (scale.get_units(10) >= yuk*0.8);
 }
 
-void hedefeIn(long int hedef){     //kod tamamen hazir olduğu zaman buradaki print'leri silebilirsiniz.
-  Serial.print("anlik encoder: ");  //vinc Cengaver'e bağlandığı zaman serial monitoru okuyamayacağız.
-  Serial.println(encoderPosition);
-  Serial.print("hedef encoder: ");
-  Serial.println(hedef);
-  Serial.println("hedefe iniliyor...");
-  Serial.println(ch7_2);
+void hedefePID(long int hedef) {
+  integral = 0;
+  lastError = 0;
 
-  while (encoderPosition < hedef){
-    if(kontrol()){ //kontrol fonksiyonu ile birlikte STOP komutu girilmiş mi diye kontrol ediliyor
+  while (true) {
+
+    if (kontrol()) {//kontrol fonksiyonu ile birlikte STOP komutu girilmiş mi diye kontrol ediliyor
       return;
     }
 
-    motorAsagi();
-  }
-  motorDur();
-  Serial.println("hedefe ulasildi.");
-  Serial.print("konum: ");
-  Serial.println(encoderPosition);
-  bekleVeKontrol(100);
-}
+    long error = hedef - encoderPosition;
 
-void hedefeCik(long int hedef){   //kod tamamen hazir olduğu zaman buradaki print'leri silebilirsiniz.
-  Serial.print("anlik encoder: "); //vinc Cengaver'e bağlandığı zaman serial monitoru okuyamıyacağız.
-  Serial.println(encoderPosition);
-  Serial.print("hedef encoder: ");
-  Serial.println(hedef);
-  Serial.println("hedefe cikiliyor...");
-
-  while (encoderPosition > hedef) {
-    if(kontrol()){ //kontrol fonksiyonu ile birlikte STOP komutu girilmiş mi diye kontrol ediliyor
-      return;
+    if (abs(error) <= tolerance) {
+      motorDur();
+      Serial.println("Hedefe ulasildi.");
+      break;
     }
 
-    motorYukari();
+    integral += error;
+    long derivative = error - lastError;
+    lastError = error;
+
+    float output = Kp * error + Ki * integral + Kd * derivative;
+
+    if (output > pwmMax) output = pwmMax;
+    if (output < -pwmMax) output = -pwmMax;
+
+    if (abs(output) < pwmMin) {  // düşük pwm ise motor çalışmayabilir, pwmMin yap
+      if (output > 0) output = pwmMin;
+      else output = -pwmMin;
+    }
+
+    if (output > 0) {
+      motorAsagi((int)output);
+    } else {
+      motorYukari((int)(-output));
+    }
+
+    bekleVeKontrol(10);
   }
-  motorDur();
-  Serial.println("hedefe ulasildi.");
-  Serial.print("konum: ");
-  Serial.println(encoderPosition);
-  bekleVeKontrol(100);
 }
 
 void bekleVeKontrol(unsigned long sure) { // delay komutu yerine millis kullanildi bu sayede istenilen vakit kadar beklerken ayni zamanda STOP kontrolu yapar
@@ -226,7 +234,6 @@ void bekleVeKontrol(unsigned long sure) { // delay komutu yerine millis kullanil
     }
   }
 }
-
 
 bool kontrol(){  //kontrol fonksiyonu ile birlikte STOP komutu girilmis mi diye kontrol ediliyor
   if (Serial.available()) {
@@ -239,7 +246,7 @@ bool kontrol(){  //kontrol fonksiyonu ile birlikte STOP komutu girilmis mi diye 
       Serial.println("Islem durduruldu.");
     }
   }
-unsigned long ch7_current = readStableValue(&ch7_width); //ch7 anlik degeri aliniyor
+  unsigned long ch7_current = readStableValue(&ch7_width); //ch7 anlik degeri aliniyor
 
 if(ch7_current > 1050 && ch7_current < 1220){ // FONKSİYONEL STOP
     stopFlag = true;
@@ -295,15 +302,14 @@ void isrCH7() {
 }
 
 
-
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 void Yuk_Al(int hedefYukseklik) {
   long int turSayisi = hedefYukseklik / tamburCevresi;    // salinacak tur sayısı hesaplanir.Tamburun çevresi yaklaşık 30cm
   long int encoderAnlik = encoderPosition;                // encoderin anlik degeri alinir
   long int encoderHedef = encoderAnlik + 4000 * turSayisi;
 
-  hedefeIn(encoderHedef); //hedefe kadar iner
-  bekleVeKontrol(15000); //delay yerine artik bekleVeKontrol fonksiyonu kullaniliyor
+  hedefePID(encoderHedef); //hedefe kadar iner
+  bekleVeKontrol(20000); //delay yerine artik bekleVeKontrol fonksiyonu kullaniliyor
 
 
   bool flag = true;
@@ -313,23 +319,23 @@ void Yuk_Al(int hedefYukseklik) {
       return;
     }
 
-    hedefeCik((long)(encoderHedef*0.7)); //yuk kontrolu icin mesafenin yuzde 30una kadar geriler
+    hedefePID((long)(encoderHedef*0.7)); //yuk kontrolu icin mesadenin yuzde 30una kadar geriler
 
     if (yukVarMi()) {  // yuk bindi mi?
-      flag = false;        // yuk varsa kontrol dongusunden cikar
+      flag = 0;        // yuk varsa kontrol dongusunden cikar
       break;
     }
     else {
-      hedefeIn(encoderHedef); //yuk yoksa hedefe tekrar iner ve döngü. içerisinde devam eder
-      bekleVeKontrol(15000);
-    }
+      hedefePID(encoderHedef); //yuk yoksa hedefe tekrar iner ve döngü. içerisinde devam eder
+      bekleVeKontrol(20000);
+      }
   }
 
-  if(kontrol()){
+    if(kontrol()){
     return;
   }
 
-  hedefeCik((long)(encoderHedef*0.5)); //yukari cikarken yüzde 50lik mesafede yuk kontrolu yapilir
+  hedefePID((long)(encoderHedef*0.5)); //yukari cikarken yüzde 50lik mesafede yuk kontrolu yapilir
   bekleVeKontrol(500);
 
   if(!yukVarMi()){ //yuk yoksa fonksiyona tekrar girilir
@@ -337,7 +343,7 @@ void Yuk_Al(int hedefYukseklik) {
     return; //suanki fonksiyondan cikar
   }
 
-  hedefeCik((long)(encoderHedef*0.25)); //yukari cikarken yüzde 25lik mesafede ikinci yuk kontrolu yapilir
+  hedefePID((long)(encoderHedef*0.25)); //yukari cikarken yüzde 25lik mesafede ikinci yuk kontrolu yapilir
   bekleVeKontrol(500);
 
   if(!yukVarMi()){ //yuk yoksa fonksiyona tekrar girilir
@@ -345,7 +351,7 @@ void Yuk_Al(int hedefYukseklik) {
     return; //suanki fonksiyondan cikar
   }
 
-  hedefeCik(4000); //yukari cekilir.
+  hedefePID(4000); //yukari cekilir.
   bekleVeKontrol(1000);
   Serial.println("YUK_AL_TAMAM");
 }
@@ -364,26 +370,26 @@ void Yuk_Birak(int hedefYukseklik) {
 
     Serial.print("Motor Asagi: ");
     Serial.println(encoderPosition);
-    motorAsagi();
+    motorAsagi(pwmMax);
   }
   motorDur();
   bekleVeKontrol(1000);
 
   if(encoderPosition >= encoderHedef){  //motorun durma sebebi yuk dusmesi mi yoksa hedef bolgeye gelmemiz mi?
-    hedefeCik((long)(encoderHedef*0.8));        //eger encoderHedef+4000 bolgesine geldigi icin durdu ise bu dongu calisir ve yuk birakilana kadar tekrarlanir.
+    hedefePID((long)(encoderHedef*0.8));        //eger encoderHedef+4000 bolgesine geldigi icin durdu ise bu dongu calisir ve yuk birakilana kadar tekrarlanir.
     bekleVeKontrol(1000);
 
     while(yukVarMi()){
 
-      if(kontrol()){
-        return;
-      }
+    if(kontrol()){
+      return;
+    }
 
-      hedefeIn((long)(encoderHedef + 4000));
-      bekleVeKontrol(1000);
+    hedefePID((long)(encoderHedef + 4000));
+    bekleVeKontrol(1000);
 
-      hedefeCik((long)(encoderHedef*0.8));
-      bekleVeKontrol(2000);
+    hedefePID((long)(encoderHedef*0.8));
+    bekleVeKontrol(2000);
     }
   }
 
@@ -391,7 +397,7 @@ void Yuk_Birak(int hedefYukseklik) {
     return;
   }
 
-  hedefeCik(1000);                      //yuk birakilir ise veya yuk hedefe ulasmadan dusmus ise vinc geri sarilir.
+  hedefePID(1000);                      //yuk birakilir ise veya yuk hedefe ulasmadan dusmus ise vinc geri sarilir.
   bekleVeKontrol(1000);
   Serial.println("YUK_BIRAK_TAMAM");
 }
