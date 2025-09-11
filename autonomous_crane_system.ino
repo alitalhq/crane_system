@@ -1,49 +1,48 @@
-/* kod yuklenmeden once girilmesi gereken degiskenler */
-const int yuk = 200;                    //yukun agirligi (gram)
-const float calibration_factor = 492.5; //loadscell kalibrasyonu manuel olarak hesaplanıp girilmeli
-const float tamburCevresi = 0.3;        // tamburun cevresi (metre)
-unsigned long pulseWidth_fonk; //CH7
+/* variables to be entered before code upload */
+const int load = 200;                    // load weight (grams)
+const float calibration_factor = 492.5;  // loadcell calibration must be calculated and entered manually
+const float drumCircumference = 0.3;     // drum circumference (meters)
+unsigned long pulseWidth_func; //CH7
 unsigned long pulseWidth_man;  //CH6
 unsigned long ch7_2;
 
-#include "HX711.h"  //loadcell kütüphanesi
+#include "HX711.h"  // loadcell library
 
-const int encoderPinA = 2;     //interrupt 0
-const int encoderPinB = 3;     //interrupt 1
+const int encoderPinA = 2;     // interrupt 0
+const int encoderPinB = 3;     // interrupt 1
 
-const int loadcell_SCK = 6;    //loadcell sck
-const int loadcell_DOUT = 7;   //loadcell dout
+const int loadcell_SCK = 6;    // loadcell sck
+const int loadcell_DOUT = 7;   // loadcell dout
 
-const int R_EN = 8;    //motor surucu R_EN
-const int L_EN = 9;    //motor surucu L_EN
-const int RPWM = 10;   //motor surucu RPWM
-const int LPWM = 11;   //motor surucu LPWM
+const int R_EN = 8;    // motor driver R_EN
+const int L_EN = 9;    // motor driver L_EN
+const int RPWM = 10;   // motor driver RPWM
+const int LPWM = 11;   // motor driver LPWM
 
 volatile unsigned long ch6_start, ch6_width;
 volatile unsigned long ch7_start, ch7_width;
 
-
 HX711 scale;
 
-int manuelMod = 0; // manuel modun durumu (1 = yukari, -1 = asagi)
+int manualMode = 0; // manual mode state (1 = up, -1 = down)
 
-volatile bool stopFlag = false;  // Durum kontrol bayrağı (fonksiyonlardan cikis icin)
+volatile bool stopFlag = false;  // Status control flag (for exiting functions)
 
 volatile long int encoderPosition = 0;
 volatile long int lastEncoded = 0;
 
-// PID parametreleri (deneyerek ayarlanmalı) suanki degerler tahmini
+// PID parameters (must be tuned experimentally) current values are approximate
 float Kp = 0.7;
 float Ki = 0.05;
 float Kd = 0.2;
 
-long lastError = 0;// PID için baslangic degerleri bunlari degistirmeyin
+long lastError = 0; // Initial values for PID, do not change these
 long integral = 0;
 
-const int pwmMin = 50;   // Motorun dönmesi için minimum PWM
-const int pwmMax = 255;  // Maks PWM
+const int pwmMin = 50;   // Minimum PWM for motor rotation
+const int pwmMax = 255;  // Maximum PWM
 
-const int tolerance = 100; // Encoder tolerans, ±100 tick kabul
+const int tolerance = 100; // Encoder tolerance, ±100 ticks acceptable
 
 void setup() {
   Serial.begin(9600);
@@ -54,24 +53,24 @@ void setup() {
   pinMode(LPWM, OUTPUT);
   pinMode(R_EN, OUTPUT);
   pinMode(L_EN, OUTPUT);
-  pinMode(20, INPUT);   // pwm okuma
-  pinMode(21, INPUT);   // pwm okuma
+  pinMode(20, INPUT);   // pwm read
+  pinMode(21, INPUT);   // pwm read
 
-  digitalWrite(R_EN, HIGH);  //motor surucuyu aktif et
+  digitalWrite(R_EN, HIGH);  // activate motor driver
   digitalWrite(L_EN, HIGH);
 
   analogWrite(RPWM, 0);
   analogWrite(LPWM, 0);
 
   scale.begin(loadcell_DOUT, loadcell_SCK);
-  scale.set_scale(calibration_factor);  // Kalibrasyon katsayısı sabit
-  scale.tare();                         // Şu anki ağırlığı sıfır kabul et
+  scale.set_scale(calibration_factor);  // Calibration factor fixed
+  scale.tare();                         // Accept current weight as zero
 
-  // Gerekirse iç pull-up'ları aç (yalnızca pull-up direnci bağlamadıysan):
+  // Enable internal pull-ups if necessary (only if pull-up resistors not connected):
   // digitalWrite(encoderPinA, HIGH);
   // digitalWrite(encoderPinB, HIGH);
 
-  // Hem A hem B pinlerine interrupt bağlanıyor
+  // Attach interrupts to both A and B pins
   attachInterrupt(digitalPinToInterrupt(encoderPinA), updateEncoder, CHANGE);
   attachInterrupt(digitalPinToInterrupt(encoderPinB), updateEncoder, CHANGE);
 
@@ -80,93 +79,90 @@ void setup() {
 }
 
 void loop() {
-  stopFlag = false; //fonksiyonlardan cikis yapildiginda "true" olur. bu yuzden sifirliyoruz
+  stopFlag = false; // when functions exit, it becomes "true". so reset it
 
-    if (manuelMod == 1 && encoderPosition <= 6000) { // eger manuel modda ise encoder 6000 degerine gelirse olasi kazalari onlemek icin otomatiik durdurur.
-    motorDur();
-    manuelMod = 0;
-    Serial.println("Motor yukari limit aşıldı, durduruldu.");
+  if (manualMode == 1 && encoderPosition <= 6000) { // if in manual mode and encoder reaches 6000, stop automatically to prevent accidents
+    motorStop();
+    manualMode = 0;
+    Serial.println("Motor upward limit exceeded, stopped.");
   }
 
   if (Serial.available()) {
     String data = Serial.readStringUntil('\n');
     data.trim();
-    if (data == "STOP") { //serial monitorden STOP okursa durdurur. (hem manuel hem otomatik fonksiyonlarda ise yarar)
+    if (data == "STOP") { // if STOP is read from serial monitor, stop (works in both manual and automatic functions)
       stopFlag = true;
-      manuelMod = 0;
-      motorDur();
-      Serial.println("Islem durduruldu.");
+      manualMode = 0;
+      motorStop();
+      Serial.println("Operation stopped.");
     }
-    else if (data.startsWith("Yuk_Al")) { //yuk al fonksiyonunu algilar
-      int parameter = data.substring(7).toInt(); // ornek girdi Yuk_Al 30
-      Yuk_Al(parameter);
+    else if (data.startsWith("Load_Take")) { // detect load take function
+      int parameter = data.substring(8).toInt(); // example input Load_Take 30
+      Load_Take(parameter);
     }
-    else if (data.startsWith("Yuk_Birak")) { //yuk birak fonksiyonunu algilar
-      int parameter = data.substring(10).toInt();// ornek girdi Yuk_Birak 30
-      Yuk_Birak(parameter);
+    else if (data.startsWith("Load_Release")) { // detect load release function
+      int parameter = data.substring(12).toInt(); // example input Load_Release 30
+      Load_Release(parameter);
     }
-    else if (data.startsWith("Manuel")) { //manuel fonksiyonunun algilar
-    char dirChar = data.charAt(7); // ornek girdi Manuel Y  veya  Manuel A
-    int dir = (dirChar == 'Y') ? 1 : ((dirChar == 'A') ? -1 : 0);
-    manuelKontrol(dir);
+    else if (data.startsWith("Manual")) { // detect manual function
+      char dirChar = data.charAt(7); // example input Manual U or Manual D
+      int dir = (dirChar == 'U') ? 1 : ((dirChar == 'D') ? -1 : 0);
+      manualControl(dir);
     }
   }
 
-  unsigned long ch6 = readStableValue(&ch6_width); //interruptı durdurmak yerine farklı şekilde kontrol sağlanıyor
-  unsigned long ch7 = readStableValue(&ch7_width);//loop içinde çok fazla interrupt durdurulursa encoder değerine zarar verebilir
+  unsigned long ch6 = readStableValue(&ch6_width); // instead of stopping interrupt, check differently
+  unsigned long ch7 = readStableValue(&ch7_width); // too many interrupt stops in loop may harm encoder value
   ch7_2 = ch7;
 
   Serial.print("CH6: "); Serial.print(ch6);
   Serial.print("  CH7: "); Serial.println(ch7);
   delay(100);
 
+  if (ch7 > 1050 && ch7 < 1220) { // FUNCTIONAL STOP
+    stopFlag = true;
+    motorStop();
+    manualMode = 0;
+    Serial.println("Stop command given by remote control");
+  }
+  else if (ch7 > 1220 && ch7 < 1400) { // FUNCTIONAL LOAD TAKE 2m
+    Serial.println("Load take2 command given by remote control");
+    Load_Take(2);
+  }
+  else if (ch7 > 1400 && ch7 < 1700) { // FUNCTIONAL LOAD RELEASE 2m
+    Serial.println("Load release2 command given by remote control");
+    Load_Release(2);
+  }
 
-    if(ch7 > 1050 && ch7 < 1220){ // FONKSİYONEL STOP
-      stopFlag = true;
-      motorDur();
-      manuelMod = 0;
-      Serial.println("Kumanda ile stop komutu verildi");
-    }
-    else if (ch7 > 1220 && ch7 < 1400){ //FONKSİYONEL YUK AL 2m
-      Serial.println("Kumanda ile yuk al2 komutu verildi");
-      Yuk_Al(2);
-    }
-    else if(ch7 > 1400 && ch7 < 1700){ // FONKSİYONEL YUK BİRAK 2m
-      Serial.println("Kumanda ile yuk birak2 komutu verildi");
-      Yuk_Birak(2);
-    }
-
-    if (ch6 > 1000 && ch6 < 1300){  //MANUEL YUKARİ
-      Serial.println("Kumanda ile manuel asagi komutu verildi");
-      manuelKontrol(1);
-    }
-    else if(ch6 > 1500 && ch6 < 1800){ //MANUEL ASAGİ
-      Serial.println("Kumanda ile manuel yukari komutu verildi");
-      manuelKontrol(-1);
-    }
-
-
+  if (ch6 > 1000 && ch6 < 1300) {  // MANUAL UP
+    Serial.println("Manual up command given by remote control");
+    manualControl(1);
+  }
+  else if (ch6 > 1500 && ch6 < 1800) { // MANUAL DOWN
+    Serial.println("Manual down command given by remote control");
+    manualControl(-1);
+  }
 }
 
-void motorYukari(int pwm){
+void motorUp(int pwm) {
   pwm = constrain(pwm, pwmMin, pwmMax);
-  analogWrite(RPWM, 0);  // motor yukari
+  analogWrite(RPWM, 0);  // motor up
   analogWrite(LPWM, pwm);
 }
 
-void motorAsagi(int pwm){
+void motorDown(int pwm) {
   pwm = constrain(pwm, pwmMin, pwmMax);
-  analogWrite(RPWM, pwm);  // motor asagi
+  analogWrite(RPWM, pwm);  // motor down
   analogWrite(LPWM, 0);
 }
 
-void motorDur(){
-  analogWrite(RPWM, 0);  // motor dur
+void motorStop() {
+  analogWrite(RPWM, 0);  // motor stop
   analogWrite(LPWM, 0);
 }
 
-// Manuel motor kontrol fonksiyonu
-void manuelKontrol(int direction) {
+// Manual motor control function
+void manualControl(int direction) {
   if (direction == 1) {
     analogWrite(RPWM, 0);
     analogWrite(LPWM, 255);
@@ -176,29 +172,29 @@ void manuelKontrol(int direction) {
     analogWrite(LPWM, 0);
   }
   else {
-    motorDur();
+    motorStop();
   }
 }
 
-bool yukVarMi(){ //yuk kontrolu
-  return (scale.get_units(10) >= yuk*0.8);
+bool isLoadPresent() { // load detection
+  return (scale.get_units(10) >= load * 0.8);
 }
 
-void hedefePID(long int hedef) {
+void moveToTargetPID(long int target) {
   integral = 0;
   lastError = 0;
 
   while (true) {
 
-    if (kontrol()) {//kontrol fonksiyonu ile birlikte STOP komutu girilmiş mi diye kontrol ediliyor
+    if (checkControl()) { // with checkControl function, STOP command is checked
       return;
     }
 
-    long error = hedef - encoderPosition;
+    long error = target - encoderPosition;
 
     if (abs(error) <= tolerance) {
-      motorDur();
-      Serial.println("Hedefe ulasildi.");
+      motorStop();
+      Serial.println("Target reached.");
       break;
     }
 
@@ -211,50 +207,49 @@ void hedefePID(long int hedef) {
     if (output > pwmMax) output = pwmMax;
     if (output < -pwmMax) output = -pwmMax;
 
-    if (abs(output) < pwmMin) {  // düşük pwm ise motor çalışmayabilir, pwmMin yap
+    if (abs(output) < pwmMin) {  // if pwm is too low, motor may not work, set to pwmMin
       if (output > 0) output = pwmMin;
       else output = -pwmMin;
     }
 
     if (output > 0) {
-      motorAsagi((int)output);
+      motorDown((int)output);
     } else {
-      motorYukari((int)(-output));
+      motorUp((int)(-output));
     }
 
-    bekleVeKontrol(10);
+    waitAndCheck(10);
   }
 }
 
-void bekleVeKontrol(unsigned long sure) { // delay komutu yerine millis kullanildi bu sayede istenilen vakit kadar beklerken ayni zamanda STOP kontrolu yapar
-  unsigned long baslangicZamani = millis();
-  while (millis() - baslangicZamani < sure) {
-    if (kontrol()){ //kontrol fonksiyonu ile birlikte STOP komutu girilmiş mi diye kontrol ediliyor
+void waitAndCheck(unsigned long duration) { // instead of delay, millis used, allows STOP check during wait
+  unsigned long startTime = millis();
+  while (millis() - startTime < duration) {
+    if (checkControl()) { // STOP command check
       return;
     }
   }
 }
 
-bool kontrol(){  //kontrol fonksiyonu ile birlikte STOP komutu girilmis mi diye kontrol ediliyor
+bool checkControl() {  // checks if STOP command entered
   if (Serial.available()) {
     String data = Serial.readStringUntil('\n');
     data.trim();
     if (data == "STOP") {
-      stopFlag = true; //stop girilirse flag true olur
-      motorDur(); // motor durur
-      manuelMod = 0; // manuel mod flagi sifirlanir
-      Serial.println("Islem durduruldu.");
+      stopFlag = true;   // if STOP entered, flag becomes true
+      motorStop();       // stop motor
+      manualMode = 0;    // reset manual mode flag
+      Serial.println("Operation stopped.");
     }
   }
-  unsigned long ch7_current = readStableValue(&ch7_width); //ch7 anlik degeri aliniyor
+  unsigned long ch7_current = readStableValue(&ch7_width); // get current ch7 value
 
-if(ch7_current > 1050 && ch7_current < 1220){ // FONKSİYONEL STOP
+  if (ch7_current > 1050 && ch7_current < 1220) { // FUNCTIONAL STOP
     stopFlag = true;
-    motorDur();
-    manuelMod = 0;
-    Serial.println("Kumanda ile stop komutu verildi");
-    }
-
+    motorStop();
+    manualMode = 0;
+    Serial.println("Stop command given by remote control");
+  }
 
   return stopFlag;
 }
@@ -268,15 +263,15 @@ unsigned long readStableValue(volatile unsigned long* var) {
   return val1;
 }
 
-// Enkoder verisini işleyen fonksiyon
+// Function processing encoder data
 void updateEncoder() {
-  int MSB = digitalRead(encoderPinA);  // Kanal A
-  int LSB = digitalRead(encoderPinB);  // Kanal B
+  int MSB = digitalRead(encoderPinA);  // Channel A
+  int LSB = digitalRead(encoderPinB);  // Channel B
 
-  int encoded = (MSB << 1) | LSB;  // 2 bitlik sayı oluştur
+  int encoded = (MSB << 1) | LSB;  // create 2-bit number
   int sum = (lastEncoded << 2) | encoded;
 
-  // Gray code çözümü: yön tayini
+  // Gray code decoding: direction determination
   if (sum == 0b1101 || sum == 0b0100 || sum == 0b0010 || sum == 0b1011)
     encoderPosition++;
   else if (sum == 0b1110 || sum == 0b0111 || sum == 0b0001 || sum == 0b1000)
@@ -301,105 +296,101 @@ void isrCH7() {
   }
 }
 
-
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-void Yuk_Al(int hedefYukseklik) {
-  long int turSayisi = hedefYukseklik / tamburCevresi;    // salinacak tur sayısı hesaplanir.Tamburun çevresi yaklaşık 30cm
-  long int encoderAnlik = encoderPosition;                // encoderin anlik degeri alinir
-  long int encoderHedef = encoderAnlik + 4000 * turSayisi;
+void Load_Take(int targetHeight) {
+  long int numTurns = targetHeight / drumCircumference;    // calculate number of turns to rotate. Drum circumference approx. 30cm
+  long int encoderCurrent = encoderPosition;               // get current encoder value
+  long int encoderTarget = encoderCurrent + 4000 * numTurns;
 
-  hedefePID(encoderHedef); //hedefe kadar iner
-  bekleVeKontrol(20000); //delay yerine artik bekleVeKontrol fonksiyonu kullaniliyor
-
+  moveToTargetPID(encoderTarget); // move down to target
+  waitAndCheck(20000);            // use waitAndCheck instead of delay
 
   bool flag = true;
   while (flag) {
 
-    if(kontrol()){ // STOP kontrolunu her dongunun basina koydum
+    if(checkControl()){ // STOP check at start of loop
       return;
     }
 
-    hedefePID((long)(encoderHedef*0.7)); //yuk kontrolu icin mesadenin yuzde 30una kadar geriler
+    moveToTargetPID((long)(encoderTarget * 0.7)); // move back 30% for load check
 
-    if (yukVarMi()) {  // yuk bindi mi?
-      flag = 0;        // yuk varsa kontrol dongusunden cikar
+    if (isLoadPresent()) {  // check if load is on
+      flag = 0;             // exit control loop if load present
       break;
     }
     else {
-      hedefePID(encoderHedef); //yuk yoksa hedefe tekrar iner ve döngü. içerisinde devam eder
-      bekleVeKontrol(20000);
-      }
+      moveToTargetPID(encoderTarget); // if no load, go to target again and continue loop
+      waitAndCheck(20000);
+    }
   }
 
-    if(kontrol()){
+  if(checkControl()){
     return;
   }
 
-  hedefePID((long)(encoderHedef*0.5)); //yukari cikarken yüzde 50lik mesafede yuk kontrolu yapilir
-  bekleVeKontrol(500);
+  moveToTargetPID((long)(encoderTarget * 0.5)); // check load at 50% of upward distance
+  waitAndCheck(500);
 
-  if(!yukVarMi()){ //yuk yoksa fonksiyona tekrar girilir
-    Yuk_Al(hedefYukseklik);
-    return; //suanki fonksiyondan cikar
+  if(!isLoadPresent()){ // if no load, retry function
+    Load_Take(targetHeight);
+    return; // exit current function
   }
 
-  hedefePID((long)(encoderHedef*0.25)); //yukari cikarken yüzde 25lik mesafede ikinci yuk kontrolu yapilir
-  bekleVeKontrol(500);
+  moveToTargetPID((long)(encoderTarget * 0.25)); // second load check at 25% of upward distance
+  waitAndCheck(500);
 
-  if(!yukVarMi()){ //yuk yoksa fonksiyona tekrar girilir
-    Yuk_Al(hedefYukseklik);
-    return; //suanki fonksiyondan cikar
+  if(!isLoadPresent()){ // if no load, retry function
+    Load_Take(targetHeight);
+    return; // exit current function
   }
 
-  hedefePID(4000); //yukari cekilir.
-  bekleVeKontrol(1000);
-  Serial.println("YUK_AL_TAMAM");
+  moveToTargetPID(4000); // lift fully
+  waitAndCheck(1000);
+  Serial.println("LOAD_TAKE_COMPLETE");
 }
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-void Yuk_Birak(int hedefYukseklik) {
+void Load_Release(int targetHeight) {
 
-  long int turSayisi = hedefYukseklik / tamburCevresi;   // salinacak tur sayısı hesaplanir
-  long int encoderAnlik = encoderPosition;               // encoderin anlik degeri alinir
-  long int encoderHedef = encoderAnlik + 4000 * turSayisi;
+  long int numTurns = targetHeight / drumCircumference;   // calculate number of turns to rotate
+  long int encoderCurrent = encoderPosition;             // get current encoder value
+  long int encoderTarget = encoderCurrent + 4000 * numTurns;
 
-  while (encoderPosition <= encoderHedef + 4000 && yukVarMi()) {  // hedef yükseklige inene kadar veya yuk dusene kadar motor asagi salinir
-    if(kontrol()){
+  while (encoderPosition <= encoderTarget + 4000 && isLoadPresent()) {  // lower motor until target height reached or load dropped
+    if(checkControl()){
       return;
     }
 
-    Serial.print("Motor Asagi: ");
+    Serial.print("Motor Down: ");
     Serial.println(encoderPosition);
-    motorAsagi(pwmMax);
+    motorDown(pwmMax);
   }
-  motorDur();
-  bekleVeKontrol(1000);
+  motorStop();
+  waitAndCheck(1000);
 
-  if(encoderPosition >= encoderHedef){  //motorun durma sebebi yuk dusmesi mi yoksa hedef bolgeye gelmemiz mi?
-    hedefePID((long)(encoderHedef*0.8));        //eger encoderHedef+4000 bolgesine geldigi icin durdu ise bu dongu calisir ve yuk birakilana kadar tekrarlanir.
-    bekleVeKontrol(1000);
+  if(encoderPosition >= encoderTarget){  // check reason for motor stop: load dropped or target reached?
+    moveToTargetPID((long)(encoderTarget * 0.8)); // if stopped at encoderTarget+4000 region, loop continues until load released
+    waitAndCheck(1000);
 
-    while(yukVarMi()){
+    while(isLoadPresent()){
 
-    if(kontrol()){
-      return;
-    }
+      if(checkControl()){
+        return;
+      }
 
-    hedefePID((long)(encoderHedef + 4000));
-    bekleVeKontrol(1000);
+      moveToTargetPID((long)(encoderTarget + 4000));
+      waitAndCheck(1000);
 
-    hedefePID((long)(encoderHedef*0.8));
-    bekleVeKontrol(2000);
+      moveToTargetPID((long)(encoderTarget * 0.8));
+      waitAndCheck(2000);
     }
   }
 
-  if(kontrol()){
+  if(checkControl()){
     return;
   }
 
-  hedefePID(1000);                      //yuk birakilir ise veya yuk hedefe ulasmadan dusmus ise vinc geri sarilir.
-  bekleVeKontrol(1000);
-  Serial.println("YUK_BIRAK_TAMAM");
+  moveToTargetPID(1000);                      // if load released or dropped before target, winch rewinds
+  waitAndCheck(1000);
+  Serial.println("LOAD_RELEASE_COMPLETE");
 }
-
- 
