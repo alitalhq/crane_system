@@ -9,7 +9,7 @@ C++ software for controlled, safe, and automatic crane load lifting and releasin
 - **Manual Mode:** Direct motor control via serial or controller; encoder limits enforce safety.  
 - **Automatic Mode:**  
   - `Load_Take` and `Load_Release` functions guide motor to target position.  
-  - Continuous load detection via load cell; process restarts safely if load drops.  
+  - Continuous load detection via loadcell; process restarts safely if load drops.  
 
 - **Safety:** `STOP` command halts all operations; millis()-based waiting maintains safety checks.  
 - **Flight Computer Integration:** Optional altitude data input for synchronized motor control.
