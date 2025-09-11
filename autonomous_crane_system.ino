@@ -169,7 +169,7 @@ void motorDur(){
 void manuelKontrol(int direction) {
   if (direction == 1) {
     analogWrite(RPWM, 0);
-e    analogWrite(LPWM, 255);
+    analogWrite(LPWM, 255);
   }
   else if (direction == -1) {
     analogWrite(RPWM, 255);
