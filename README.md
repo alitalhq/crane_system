@@ -1,6 +1,6 @@
 # Crane Control Software
 
-C++ software for controlled, safe, and automatic crane load lifting and releasing. Supports manual and automatic modes, integrating encoder, load cell, and PWM input for precise operation.
+C++ software for controlled, safe, and automatic crane load lifting and releasing. Supports manual and automatic modes, integrating encoder, loadcell, and PWM input for precise operation.
 
 ---
 
